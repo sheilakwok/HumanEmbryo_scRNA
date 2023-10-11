@@ -1,44 +1,33 @@
 ﻿# Run CellRanger on fastq
 # Install and unpack CellRanger
 
-
 # 1. Export path
 export PATH=/data/yard/apps/cellranger-7.0.1:$PATH
 
-
 # 2. Run cellranger count with human reference genome
 cellranger count --id lib_emb --fastqs /data/fastq/ --transcriptome refdata-gex-GRCh38-2020-A
-
-
 
 
 # Demultiplexing with Freemuxlet
 # Install 1) popscle; 2) singlularity image; download publicly available SNP genotype data
 # Prepare bam file from scRNA_seq data
 
-
 # 1. Sort BAM file
 samtools sort [bam.bam] -o [bam_sorted.bam]
 singularity exec --bind /data/emb_lib
 
-
 # 2. Sort reference vcf file following order in bam_sorted.bam 
 bash ~/sort_vcf_same_as_bam.sh bam_sorted.bam GRCh38_1000G_MAF0.01_ExonFiltered_ChrEncoding.vcf > GRCh38_1000G_MAF0.01_ExonFiltered_ChrEncoding_SORTED.vcf
-
 
 # 3. Run freemuxlet
 singularity exec --bind /data/emb_lib Demuxafy.sif popscle dsc-pileup --sam bam_sorted.bam --vcf GRCh38_1000G_MAF0.01_ExonFiltered_ChrEncoding_SORTED.vcf --out ./pileup
 
-
 singularity exec --bind /data/emb_lib Demuxafy.sif popscle freemuxlet --plp pileup  --out ./freemuxlet_result --nsample 20
-
 
 # 4. Visualize result summary
 singularity exec --bind /data/emb_lib Demuxafy.sif bash Freemuxlet_summary.sh freemuxlet_result.clust1.samples.gz 
 
-
 # 5. Create embryo origin label file for later analysis in R 
 gunzip -k freemuxlet_result.clust1.samples.gz
-
 
 singularity exec --bind /data/emb_lib Demuxafy.sif Combine_Results.R -f freemuxlet_result.clust1.samples -m "AnySinglet" -o ./combined_results.tsv
