@@ -8,7 +8,7 @@ export PATH=/data/yard/apps/cellranger-7.0.1:$PATH
 cellranger count --id lib_emb --fastqs /data/fastq/ --transcriptome refdata-gex-GRCh38-2020-A
 
 
-# Demultiplexing with Freemuxlet
+# Demultiplexing bam file from CellRanger output with Freemuxlet
 # Install 1) popscle; 2) singlularity image; download publicly available SNP genotype data
 # Prepare bam file from scRNA_seq data
 
