@@ -253,9 +253,9 @@ seurat_all.harmony$samples <- paste0(seurat_all.harmony$cnv_status, seurat_all.h
 table(seurat_all.harmony$samples) # Find #aneuploid cells and euploid cells in each embryo
 
 meta <- seurat_all.harmony@meta.data
-meta$emb_type <- ifelse(meta$id %in% c(0, 4, 12), "Mosaic",
-                       ifelse(lin$id %in% c(1, 5, 6, 7, 8, 10), "Aneuploid",
-                              ifelse(lin$id %in% c(2, 3, 9, 11, 13, 14, 15, 16, 18, 19, 20), "Euploid", NA)))
+meta$emb_type <- ifelse(meta$id %in% c(0, 4, 12), "Mosaic", # %Aneuploidy within 15-90%
+                       ifelse(lin$id %in% c(1, 5, 6, 7, 8, 10), "Aneuploid", # %Aneuploidy >90%
+                              ifelse(lin$id %in% c(2, 3, 9, 11, 13, 14, 15, 16, 18, 19, 20), "Euploid", NA))) # %Aneuploidy <10%
 meta <- select(meta,emb_type)
 seurat_all.harmony <- AddMetaData(seurat_all.harmony,meta)
 
