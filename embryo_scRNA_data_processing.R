@@ -22,7 +22,7 @@ seurat_all <- subset(seurat_all,
 
 # Remove cells with mitochondrial gene content >25% or UMI count <1000
 lib_all[["percent.mito"]] <- PercentageFeatureSet(lib_all, pattern = "^MT-")
-lib_all <- subset(lib_all, subset = percent.mito < 25 & nCount_RNA >= 1000)
+lib_all <- subset(lib_all, subset = percent.mito < 20 & nCount_RNA >= 1000)
 
 # Keep embryos with >10 cells after filtering
 lib_all <- subset(lib_all, subset == id %in% 
