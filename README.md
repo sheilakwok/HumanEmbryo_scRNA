@@ -15,9 +15,9 @@ This repository includes codes used in the bioinformatic analysis of scRNA-seq d
 - **interactome_analysis.R**  
   Codes for analysis of ligand–receptor interactions and crosstalk strength between aneuploid and euploid populations of mosaic embryos.
 
-- **01_monocle_lineage_trajectories.R**  
+- **trajectory_progression_analysis.R**  
   Codes for lineage-resolved trajectory inference using Monocle3. Includes conversion of Seurat objects into Monocle3 CellDataSets, clustering, graph learning, pseudotime ordering, identification of trajectory-dependent genes, and marker validation for Epiblast (EPI), Hypoblast (HYPO), and Trophoblast (TB) lineages.
 
-- **02_scenic_core.R**  
+- **scenic_regulon_analysis.R**  
   Codes for gene regulatory network inference using SCENIC. Includes gene filtering, co-expression network construction (GENIE3), motif enrichment to build regulons (RcisTarget), AUCell-based regulon activity scoring, and calculation of Regulon Specificity Scores (RSS) across embryo annotations.
 
