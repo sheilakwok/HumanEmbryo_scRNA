@@ -25,9 +25,7 @@ lib_all[["percent.mito"]] <- PercentageFeatureSet(lib_all, pattern = "^MT-")
 lib_all <- subset(lib_all, subset = percent.mito < 20 & nCount_RNA >= 1000)
 
 # Keep embryos with >10 cells after filtering
-lib_all <- subset(lib_all, subset == id %in% 
-           c("0","1","2","3","4","7","8","9","10","11","12","13",
-             "14","15","16","18","19","20"))
+lib_all <- subset(lib_all, id %in% as.character(0:30))
 
 # Run the standard workflow for visualization and clustering
 lib_all <- NormalizeData(lib_all)
@@ -135,7 +133,7 @@ DimPlot(seurat_all.harmony, reduction = "umap", label = T, label.size = 3,
                      values = c("#D3D3D3","red"))
 
 # Add reference label to cells for next inferCNV run 
-x <- c(rep(21,10)) # set euploid reference cells as cluster 21
+x <- c(rep(31,15)) # set euploid reference cells as cluster 21
 eup_cells <- data.frame(eup_ref_list,x)
 colnames(eup_cells) <- c("rownames", "infercnv_label")
 eup_cells <- column_to_rownames(eup_cells, var = "rownames")
@@ -156,7 +154,7 @@ anno2$infercnv_label <- factor(anno2$infercnv_label)
 infercnv2 <- CreateInfercnvObject(raw_counts_matrix = raw_matrix2,
                                  annotations_file = anno2,
                                  gene_order_file = "../gencode_v19_gene_pos_infercnv.txt",
-                                 ref_group_names = c("21"), # Annotation for euploid reference cells 
+                                 ref_group_names = c("31"), # Annotation for euploid reference cells 
                                  chr_exclude = c("chrM"))
 
 infercnv2 = infercnv::run(infercnv,
@@ -253,21 +251,12 @@ seurat_all.harmony$samples <- paste0(seurat_all.harmony$cnv_status, seurat_all.h
 table(seurat_all.harmony$samples) # Find #aneuploid cells and euploid cells in each embryo
 
 meta <- seurat_all.harmony@meta.data
-meta$emb_type <- ifelse(meta$id %in% c(0, 4, 12), "Mosaic", # %Aneuploidy within 15-90%
-                       ifelse(lin$id %in% c(1, 5, 6, 7, 8, 10), "Aneuploid", # %Aneuploidy >90%
-                              ifelse(lin$id %in% c(2, 3, 9, 11, 13, 14, 15, 16, 18, 19, 20), "Euploid", NA))) # %Aneuploidy <10%
+meta$emb_type <- ifelse(meta$id %in% c(1, 3, 5, 13, 21, 24, 25, 27), "Mosaic", # %Aneuploidy within 10-90%
+                       ifelse(lin$id %in% c(2, 6, 7, 8, 9, 11, 22), "Aneuploid", # %Aneuploidy >90%
+                              ifelse(lin$id %in% c(4, 10, 12, 14, 15, 16, 17, 18, 19, 20, 23, 26, 28, 29, 30, 31), "Euploid", NA))) # %Aneuploidy <10%
 meta <- select(meta,emb_type)
 seurat_all.harmony <- AddMetaData(seurat_all.harmony,meta)
 
-# Reorganize embryo order based on embryo types
-paper_id <- c("12","15","1","2","13","16","17","18","19","3","20","4",
-              "14","5","6","7","8","9","10","11")
-meta <- seurat_all.harmony@meta.data
-meta$paper_id <- paste0(meta$id)
-meta$paper_id <- factor(meta$id)
-levels(meta$paper_id) <- paper_id
-meta <- select(meta, paper_id)
-seurat_all.harmony <- AddMetaData(seurat_all.harmony, meta)
 
 # Create distribution plot of max chromosome-CNV proportion for all cells 
 VlnPlot(seurat_all.harmony, features = "max_cnv_prop")
