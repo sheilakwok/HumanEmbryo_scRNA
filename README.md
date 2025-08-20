@@ -1,7 +1,7 @@
 # HumanEmbryo_scRNA
 
 This repository includes codes used in the bioinformatic analysis of scRNA-seq data for the paper  
-*"Single-cell transcriptomics of post-implantation human embryos: characterizing aneuploidy effects and lineage dynamics"*.
+*"Single-cell transcriptomics of post-implantation human embryos: characterizing lineage dynamics and aneuploid cell fates"*.
 
 - **cell_demultiplexing.txt**  
   Codes for processing of FASTQ files via CellRanger and single cell demultiplexing via Freemuxlet.
