@@ -1,0 +1,178 @@
+
+# Monocle3 trajectory analyses for Epiblast (EPI), Hypoblast (HYPO), and Trophoblast (TB)
+
+## --------------------------- Setup & Packages ---------------------------------
+
+required_pkgs <- c(
+  "Seurat", "SeuratWrappers", "monocle3",
+  "ggplot2", "patchwork", "dplyr", "SummarizedExperiment"
+)
+for (p in required_pkgs) {
+  if (!requireNamespace(p, quietly = TRUE)) stop(sprintf("Package '%s' is required.", p))
+}
+library(Seurat)
+library(SeuratWrappers)
+library(monocle3)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(SummarizedExperiment)
+
+set.seed(1234)
+options(stringsAsFactors = FALSE)
+
+## --------------------------- I/O & Directories --------------------------------
+
+# Expect a Seurat object named `emb_all.harmony` already loaded.
+# If running standalone, uncomment and adjust:
+# emb_all.harmony <- readRDS("data/processed/emb_all.harmony.rds")
+
+base_out  <- "outputs/monocle"
+fig_path  <- function(lineage) file.path(base_out, lineage, "figures")
+res_path  <- function(lineage) file.path(base_out, lineage, "results")
+mkdirs    <- function(lineage) {
+  dir.create(fig_path(lineage), recursive = TRUE, showWarnings = FALSE)
+  dir.create(res_path(lineage), recursive = TRUE, showWarnings = FALSE)
+}
+
+## --------------------------- Helper: Run a Lineage -----------------------------
+
+run_monocle_for_lineage <- function(
+    seurat_obj,
+    lineage_name,
+    subset_expr,               # expression used in Seurat::subset(..., subset = <EXPR>)
+    root_cluster_id,           # character or numeric matching cds@clusters$UMAP$clusters
+    cluster_resolution = 1e-1, # within-lineage resolution
+    markers_list = list()      # named list of marker vectors for plotting
+) {
+  message(sprintf("\n=== %s ===", lineage_name))
+  mkdirs(lineage_name)
+  
+  # --- Subset Seurat to lineage ---
+  sobj <- subset(seurat_obj, subset = !!rlang::parse_expr(subset_expr))
+  if (ncol(sobj) == 0) stop(sprintf("[%s] Subset returned 0 cells. Check subset expression.", lineage_name))
+  
+  # --- Seurat → Monocle3 CDS; cluster; quick overview plots ---
+  cds <- as.cell_data_set(sobj)
+  cds <- cluster_cells(cds, resolution = cluster_resolution)
+  
+  p_cluster <- plot_cells(cds, color_cells_by = "cluster", show_trajectory_graph = FALSE)
+  p_part    <- plot_cells(cds, color_cells_by = "partition", show_trajectory_graph = FALSE)
+  ggsave(file.path(fig_path(lineage_name), "cluster.png"),  p_cluster, width = 6, height = 5, dpi = 300)
+  ggsave(file.path(fig_path(lineage_name), "partition.png"), p_part,    width = 6, height = 5, dpi = 300)
+  
+  # --- Learn trajectory graph ---
+  cds <- learn_graph(cds, use_partition = FALSE, verbose = FALSE)
+  p_graph <- plot_cells(
+    cds, color_cells_by = "cluster",
+    label_groups_by_cluster = FALSE, label_leaves = FALSE,
+    label_branch_points = FALSE, label_roots = FALSE,
+    cell_size = 1, alpha = 0.3, group_label_size = 4, graph_label_size = 3
+  )
+  ggsave(file.path(fig_path(lineage_name), "graph.png"), p_graph, width = 6, height = 5, dpi = 300)
+  
+  # --- Root selection & pseudotime ---
+  umap_clusters <- cds@clusters@listData[["UMAP"]][["clusters"]]
+  root_cells <- colnames(cds)[umap_clusters == as.character(root_cluster_id)]
+  if (length(root_cells) == 0)
+    stop(sprintf("[%s] No cells found for root cluster '%s'. Adjust root_cluster_id.", lineage_name, root_cluster_id))
+  
+  cds <- order_cells(cds, root_cells = root_cells)
+  
+  p_pt <- plot_cells(
+    cds, color_cells_by = "pseudotime",
+    label_cell_groups = TRUE, label_groups_by_cluster = TRUE,
+    label_leaves = FALSE, label_branch_points = FALSE, label_roots = FALSE,
+    cell_size = 1.5, alpha = 0.5, group_label_size = 3, show_trajectory_graph = FALSE
+  )
+  ggsave(file.path(fig_path(lineage_name), "pseudotime.png"), p_pt, width = 6, height = 5, dpi = 300)
+  
+  # --- Store pseudotime in colData for downstream use (e.g., boxplots) ---
+  colData(cds)$monocle3_pseudotime <- pseudotime(cds)
+  
+  # --- Ensure gene_short_name is present ---
+  if (!"gene_short_name" %in% colnames(rowData(cds))) {
+    rowData(cds)$gene_short_name <- rownames(cds)
+  }
+  
+  # --- Graph-dependent genes (Moran’s I on principal graph) ---
+  pr_res <- graph_test(cds, neighbor_graph = "principal_graph", cores = 4)
+  sig_df <- subset(pr_res, q_value < 0.05)
+  sorted_df <- pr_res[order(pr_res$p_value), ]
+  top_n <- 200L
+  top_deg <- head(rownames(sorted_df), top_n)
+  
+  write.csv(pr_res, file.path(res_path(lineage_name), "graph_test_all.csv"), row.names = TRUE)
+  write.csv(sig_df, file.path(res_path(lineage_name), "graph_test_significant_q<0.05.csv"), row.names = TRUE)
+  writeLines(top_deg, file.path(res_path(lineage_name), sprintf("top_%d_deg.txt", top_n)))
+  
+  # --- Marker visualization (optional, per provided sets) ---
+  if (length(markers_list)) {
+    for (nm in names(markers_list)) {
+      p_mk <- plot_cells(
+        cds, genes = markers_list[[nm]],
+        show_trajectory_graph = FALSE, label_cell_groups = TRUE,
+        label_leaves = FALSE, cell_size = 1.5, alpha = 0.5
+      )
+      fname <- sprintf("markers_%s.png", gsub("[^A-Za-z0-9_]+", "_", nm))
+      ggsave(file.path(fig_path(lineage_name), fname), p_mk, width = 8, height = 6, dpi = 300)
+    }
+  }
+  
+  # --- Optional pseudotime vs. group boxplot if 'emb_type' exists ---
+  if ("emb_type" %in% colnames(colData(cds))) {
+    df <- as.data.frame(colData(cds))
+    p_box <- ggplot(df, aes(monocle3_pseudotime, emb_type, fill = emb_type)) +
+      geom_boxplot() + labs(x = "Pseudotime", y = "emb_type") + theme_bw()
+    ggsave(file.path(fig_path(lineage_name), "pseudotime_by_emb_type_boxplot.png"),
+           p_box, width = 6, height = 4, dpi = 300)
+  }
+  
+
+
+## --------------------------- Lineage: EPI -------------------------------------
+
+epi_markers <- list(
+  progression = c("HOPX","PGF","S100A6","HMOX","MECOM","MEIOC","TEX35","RBM15","PROM1","STIL","JUNB"),
+  pluripotency = c("KLF4","FGF4","PRDM14","ZFP42","SSEA3","XACT")
+)
+
+cds_epi <- run_monocle_for_lineage(
+  seurat_obj       = emb_all.harmony,
+  lineage_name     = "EPI",
+  subset_expr      = 'seurat_clusters == "EPI"',
+  root_cluster_id  = "4",
+  cluster_resolution = 1e-1,
+  markers_list     = epi_markers
+)
+
+## --------------------------- Lineage: HYPO ------------------------------------
+
+hypo_markers <- list(
+  endoderm = c("GATA4","GATA6","SOX17","PDGFRA","FOXA2")
+)
+
+cds_hypo <- run_monocle_for_lineage(
+  seurat_obj       = emb_all.harmony,
+  lineage_name     = "HYPO",
+  subset_expr      = 'seurat_clusters == "HYPO"',
+  root_cluster_id  = "2",
+  cluster_resolution = 1e-1,
+  markers_list     = hypo_markers
+)
+
+## --------------------------- Lineage: TB --------------------------------------
+
+# TB combines CTB, STB, EVT clusters
+tb_markers <- list(
+  trophoblast = c("GATA3","TFAP2C","HLA-G","KRT7","TEAD4","MMP2","LGALS13","CGA","CGB5") # edit as desired
+)
+
+cds_tb <- run_monocle_for_lineage(
+  seurat_obj       = emb_all.harmony,
+  lineage_name     = "TB",
+  subset_expr      = 'seurat_clusters %in% c("CTB","STB","EVT")',
+  root_cluster_id  = "1",
+  cluster_resolution = 1e-4,   # your original very fine resolution
+  markers_list     = tb_markers
+)
