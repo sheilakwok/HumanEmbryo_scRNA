@@ -1,0 +1,137 @@
+
+## --------------------------- Packages -----------------------------------------
+required_pkgs <- c(
+  "SCENIC", "AUCell", "RcisTarget", "GENIE3",
+  "doRNG", "doMC", "dplyr", "SummarizedExperiment"
+)
+for (p in required_pkgs) {
+  if (!requireNamespace(p, quietly = TRUE)) stop(sprintf("Package '%s' is required.", p))
+}
+library(SCENIC)
+library(AUCell)
+library(RcisTarget)
+library(GENIE3)
+library(doRNG)
+library(doMC)
+library(dplyr)
+library(SummarizedExperiment)
+
+set.seed(1234)
+options(stringsAsFactors = FALSE)
+
+## --------------------------- Inputs & Config ----------------------------------
+# Expect a Seurat object named `emb_all.harmony` already in the environment.
+# If running standalone, uncomment and set path:
+# emb_all.harmony <- readRDS("data/processed/emb_all.harmony.rds")
+
+# Organism & cisTarget dbs (adjust paths for your machine/cluster)
+org   <- "hgnc"   # human: 'hgnc' (mouse: 'mgi')
+dbDir <- "/Users/sheilak97/Desktop/scenic/cisTarget_databases"
+
+# Feather databases (examples for hg38; ensure these files exist in dbDir)
+dbs <- c(
+  "hg38__refseq-r80__10kb_up_and_down_tss.mc9nr.feather",
+  "hg38__refseq-r80__500bp_up_and_100bp_down_tss.mc9nr.feather"
+)
+
+# Parallelization
+nCores <- 8
+registerDoMC(nCores)
+doRNG::registerDoRNG(seed = 1234)
+
+# Project title & output folder
+myDatasetTitle <- "emb_scenic"
+outDir <- file.path("outputs", "scenic_core")
+dir.create(outDir, recursive = TRUE, showWarnings = FALSE)
+
+## --------------------------- Expression Matrix --------------------------------
+# Use raw counts from Seurat assay "RNA"
+exprMat <- emb_all.harmony@assays$RNA@counts
+exprMat <- as.matrix(exprMat)  # SCENIC expects a dense or dgCMatrix; as.matrix is safe here
+
+# Cell metadata (used later for RSS annotations)
+cellInfo <- emb_all.harmony@meta.data
+
+## --------------------------- Initialize SCENIC --------------------------------
+# Validate DB files
+dbPaths <- file.path(dbDir, dbs)
+if (!all(file.exists(dbPaths))) {
+  missing <- dbPaths[!file.exists(dbPaths)]
+  stop(sprintf("Missing cisTarget db files:\n- %s", paste(missing, collapse = "\n- ")))
+}
+
+scenicOptions <- initializeScenic(
+  org = org,
+  dbDir = dbDir,
+  dbs = dbs,
+  nCores = nCores
+)
+scenicOptions@settings$datasetTitle <- myDatasetTitle
+scenicOptions@settings$dbDir <- dbDir
+scenicOptions@inputDatasetInfo$cellInfo <- cellInfo
+
+saveRDS(scenicOptions, file.path(outDir, "scenicOptions_init.rds"))
+
+## --------------------------- Gene Filtering -----------------------------------
+# Keep genes expressed (counts) in at least X% of cells at Y minimal counts
+minCountsPerGene <- 5 * 0.01 * ncol(exprMat)    # your original heuristic
+minSamples       <- ncol(exprMat) * 0.02        # present in >=2% cells
+
+genesKept <- geneFiltering(
+  exprMat,
+  scenicOptions = scenicOptions,
+  minCountsPerGene = minCountsPerGene,
+  minSamples = minSamples
+)
+exprMat_filtered <- exprMat[genesKept, , drop = FALSE]
+saveRDS(exprMat_filtered, file.path(outDir, "exprMat_filtered.rds"))
+
+# Correlations on filtered matrix
+runCorrelation(exprMat_filtered, scenicOptions)
+exprMat_filtered_log <- log2(exprMat_filtered + 1)
+saveRDS(exprMat_filtered_log, file.path(outDir, "exprMat_filtered_log.rds"))
+
+## --------------------------- GENIE3 -------------------------------------------
+runGenie3(exprMat_filtered_log, scenicOptions)
+saveRDS(scenicOptions, file.path(outDir, "scenicOptions_after_genie3.rds"))
+
+## --------------------------- Build GRN & Regulons -----------------------------
+# 1) Co-expression modules
+scenicOptions <- runSCENIC_1_coexNetwork2modules(scenicOptions)
+saveRDS(scenicOptions, file.path(outDir, "scenicOptions_after_modules.rds"))
+
+# 2) TF motif enrichment → regulons
+scenicOptions <- runSCENIC_2_createRegulons(
+  scenicOptions,
+  coexMethod = c("top5perTarget")  # matches your original setting
+)
+saveRDS(scenicOptions, file.path(outDir, "scenicOptions_after_regulons.rds"))
+
+## --------------------------- Score Cells (AUC) --------------------------------
+# 3) AUCell scoring of regulons
+exprMat_log <- log2(exprMat + 1)  # score on full gene set (as you did)
+scenicOptions <- runSCENIC_3_scoreCells(scenicOptions, exprMat_log)
+saveRDS(scenicOptions, file.path(outDir, "scenicOptions_after_aucell.rds"))
+
+# Load AUC for downstream use
+regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")  # AUCellResults object
+aucMat <- AUCell::getAUC(regulonAUC)                       # matrix: regulons x cells
+saveRDS(regulonAUC, file.path(outDir, "regulonAUC.rds"))
+saveRDS(aucMat,      file.path(outDir, "regulonAUC_matrix.rds"))
+
+## --------------------------- Regulon Specificity (RSS) ------------------------
+# Compute RSS for relevant annotations present in cellInfo
+rss_list <- list()
+annots <- c("emb_type", "seurat_clusters", "emb_pop")
+annots <- annots[annots %in% colnames(cellInfo)]  # only those that exist
+
+if (length(annots) > 0) {
+  commonCells <- intersect(colnames(aucMat), rownames(cellInfo))
+  if (length(commonCells) == 0) stop("No overlapping cells between AUC matrix and cellInfo.")
+  for (ann in annots) {
+    lab <- cellInfo[commonCells, ann, drop = TRUE]
+    rss_list[[ann]] <- calcRSS(AUC = aucMat[, commonCells, drop = FALSE], cellAnnotation = lab)
+  }
+  saveRDS(rss_list, file.path(outDir, "rss_list.rds"))
+}
+
